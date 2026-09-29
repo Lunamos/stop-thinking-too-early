@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv*/
+results/
+data/*.json
+analysis/out/
+scripts/local_config.py

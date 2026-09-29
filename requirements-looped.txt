@@ -1,0 +1,12 @@
+# Environment for the pretrained looped models (Ouro-1.4B/2.6B and Huginn-0125 load with trust_remote_code and need
+# transformers 4.56). Python 3.11, CUDA 12.6. Versions as used for the paper.
+torch==2.8.0
+transformers==4.56.2
+datasets==3.6.0
+accelerate==1.15.0
+safetensors==0.8.0
+tokenizers==0.22.2
+huggingface_hub==0.36.2
+numpy==1.26.4
+scipy==1.17.1
+matplotlib==3.11.2

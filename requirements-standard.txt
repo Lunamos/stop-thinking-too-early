@@ -1,0 +1,11 @@
+# Environment for the standard models (Qwen3, Llama-3, OLMo-3, Gemma-3), the toy models, MuSiQue with standard models,
+# and all analysis / figure scripts. Python 3.12, CUDA 12.6. Versions as used for the paper.
+torch==2.12.1
+transformers==5.13.0
+datasets==5.0.0
+accelerate==1.14.0
+safetensors==0.8.0
+tokenizers==0.22.2
+huggingface_hub==1.22.0
+numpy==2.5.1
+matplotlib==3.11.0

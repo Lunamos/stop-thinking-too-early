@@ -1,0 +1,740 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Transformers Stop Thinking Too Early, and a Tiny LoRA Fixes It</title>
+<meta name="description" content="Pretrained transformers follow in-context reference chains for only a few steps. One rank-8 LoRA at one early layer, under 0.01% of the parameters, lets Qwen3-8B follow 50-line chains in a single pass and a looped model at least 160.">
+<meta name="author" content="Zehao Jin, Ruixuan Deng, Junran Wang">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Transformers Stop Thinking Too Early, and a Tiny LoRA Fixes It">
+<meta property="og:description" content="Pretrained transformers follow in-context reference chains for only a few steps. One rank-8 LoRA at one early layer, under 0.01% of the parameters, lets Qwen3-8B follow 50-line chains in a single pass and a looped model at least 160.">
+<meta property="og:image" content="https://lunamos.github.io/stop-thinking-too-early/assets/fig-teaser.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Transformers Stop Thinking Too Early, and a Tiny LoRA Fixes It">
+<meta name="twitter:description" content="Pretrained transformers follow in-context reference chains for only a few steps. One rank-8 LoRA at one early layer, under 0.01% of the parameters, lets Qwen3-8B follow 50-line chains in a single pass and a looped model at least 160.">
+<meta name="twitter:image" content="https://lunamos.github.io/stop-thinking-too-early/assets/fig-teaser.png">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,650;12..96,800&family=IBM+Plex+Mono:wght@400;500;600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap">
+<style>html,body{margin:0}:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}img{max-width:100%}[hidden]{display:none!important}</style>
+<style>
+:root{
+  --paper:#FFFFFF; --surface:#FFFFFF; --sunk:#F3F5F8;
+  --ink:#131720; --ink-2:#434C5B; --muted:#778091; --rule:#DCE0E7;
+  --frozen:#6B7684; --frozen-soft:#E3E6EB;
+  --lora:#D55E00; --lora-ink:#A94A00; --lora-soft:#FBE6D8;
+  --chainA:#0072B2; --chainA-soft:#DDEBF6;
+  --chainB:#008F68; --chainB-soft:#D8F0E7;
+  --violet:#6A51A3; --sky:#3A8FCB;
+  --plate:#FFFFFF; --shadow:0 1px 0 rgba(19,23,32,.04), 0 12px 32px -18px rgba(19,23,32,.28);
+  --display:"Bricolage Grotesque","Avenir Next","Segoe UI",system-ui,sans-serif;
+  --serif:"Newsreader","Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --measure:40rem; --wide:70rem;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:72px}
+@media (prefers-reduced-motion: reduce){html{scroll-behavior:auto}}
+body{background:var(--paper);color:var(--ink);font-family:var(--serif);font-size:1.125rem;line-height:1.62;
+  padding-inline:clamp(16px,4vw,40px);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+a{color:inherit;text-decoration-color:color-mix(in srgb,currentColor 35%,transparent);text-underline-offset:3px}
+a:hover{text-decoration-color:currentColor}
+:focus-visible{outline:2px solid var(--chainA);outline-offset:3px;border-radius:4px}
+code,kbd,.mono{font-family:var(--mono);font-size:.86em}
+h1,h2,h3{font-family:var(--display);font-weight:650;letter-spacing:-.015em;text-wrap:balance;margin:0}
+p{margin:0}
+.wrap{max-width:var(--wide);margin-inline:auto}
+.prose{max-width:var(--measure);margin-inline:auto;display:grid;gap:1.05rem}
+.prose p{color:var(--ink-2)}
+.prose strong{color:var(--ink);font-weight:500}
+.tnum{font-variant-numeric:tabular-nums}
+
+/* ---------- top bar ---------- */
+.topbar{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;margin-inline:calc(-1*clamp(16px,4vw,40px));
+  padding:10px clamp(16px,4vw,40px);background:color-mix(in srgb,var(--paper) 86%,transparent);
+  backdrop-filter:saturate(1.2) blur(10px);-webkit-backdrop-filter:saturate(1.2) blur(10px);border-bottom:1px solid var(--rule)}
+.topbar-in{max-width:var(--wide);margin-inline:auto;display:flex;align-items:center;gap:20px}
+.brand{font-family:var(--display);font-weight:800;font-size:.98rem;letter-spacing:-.01em;text-decoration:none;white-space:nowrap}
+.brand span{color:var(--lora)}
+.toplinks{display:flex;gap:4px;margin-left:auto;flex-wrap:wrap}
+.toplinks a{font-family:var(--mono);font-size:.74rem;letter-spacing:.04em;text-transform:uppercase;text-decoration:none;color:var(--ink-2);
+  padding:6px 9px;border-radius:999px}
+.toplinks a:hover{background:var(--sunk);color:var(--ink)}
+.toplinks a.pdf{background:var(--ink);color:var(--paper)}
+@media (max-width:760px){.toplinks a:not(.pdf){display:none}}
+
+/* ---------- hero ---------- */
+.hero{padding-block:clamp(40px,7vw,84px) clamp(28px,4vw,40px)}
+.eyebrow{font-family:var(--mono);font-size:.76rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);display:flex;gap:12px;flex-wrap:wrap}
+.eyebrow b{color:var(--lora-ink);font-weight:600}
+.hero h1{font-size:clamp(2.3rem,5.6vw,4.35rem);line-height:1.02;letter-spacing:-.03em;font-weight:800;margin-top:18px;max-width:17ch}
+.hero h1 .fix{color:var(--lora);white-space:nowrap}
+.byline{margin-top:26px;display:flex;flex-wrap:wrap;gap:6px 22px;align-items:baseline}
+.authors{font-family:var(--display);font-weight:650;font-size:1.12rem;display:flex;gap:6px 18px;flex-wrap:wrap}
+.affil{color:var(--ink-2);font-size:1rem}
+.contact{font-family:var(--mono);font-size:.8rem;color:var(--muted);user-select:all}
+.actions{margin-top:26px;display:flex;flex-wrap:wrap;gap:10px}
+.btn{display:inline-flex;align-items:center;gap:9px;font-family:var(--mono);font-size:.82rem;font-weight:500;letter-spacing:.02em;text-decoration:none;
+  padding:10px 16px;border-radius:999px;border:1px solid var(--rule);background:var(--surface);color:var(--ink);line-height:1}
+.btn:hover{border-color:var(--ink-2)}
+.btn.primary{background:var(--lora);border-color:var(--lora);color:#fff}
+.btn.primary:hover{filter:brightness(1.06)}
+.video{margin-block:8px 36px}
+.video-frame{position:relative;width:100%;max-width:100%;aspect-ratio:16/9;border-radius:14px;overflow:hidden;border:1px solid var(--rule);background:var(--sunk)}
+.video-frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+.video-cn{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-top:14px;padding:14px 18px;border-radius:12px;background:var(--lora-soft);border:1px solid color-mix(in srgb,var(--lora) 35%,transparent)}
+.video-cn p{margin:0;color:var(--ink);font-size:1rem}
+.btn.cn{background:var(--lora);border-color:var(--lora);color:#fff;font-size:.9rem;padding-block:10px}
+.btn.cn:hover{filter:brightness(1.06)}
+.btn.soon{color:var(--muted);cursor:default;border-style:dashed}
+.btn.soon:hover{border-color:var(--rule)}
+.btn small{font-size:.7rem;opacity:.8;text-transform:uppercase;letter-spacing:.08em}
+.lede{margin-top:34px;max-width:46rem;font-size:clamp(1.18rem,1.9vw,1.42rem);line-height:1.5;color:var(--ink)}
+.lede code{font-size:.8em;background:var(--sunk);padding:.08em .38em;border-radius:5px;white-space:nowrap}
+.lede em{font-style:italic;color:var(--lora-ink)}
+
+/* ---------- relay explorable ---------- */
+.relay{padding-block:16px 8px}
+.relay-card{background:var(--surface);border:1px solid var(--rule);border-radius:18px;box-shadow:var(--shadow);padding:clamp(16px,2.6vw,30px);display:grid;gap:22px}
+.relay-head{display:flex;flex-wrap:wrap;gap:8px 28px;align-items:end;justify-content:space-between}
+.relay-head h2{font-size:clamp(1.45rem,2.4vw,1.9rem)}
+.relay-head p{color:var(--ink-2);font-size:1rem;max-width:36rem}
+.controls{display:grid;grid-template-columns:auto 1fr auto;gap:14px;align-items:center}
+.play{width:44px;height:44px;border-radius:50%;border:1px solid var(--rule);background:var(--sunk);color:var(--ink);cursor:pointer;display:grid;place-items:center}
+.play:hover{border-color:var(--ink-2)}
+.play svg{width:16px;height:16px;fill:currentColor}
+.layer-read{font-family:var(--mono);font-size:.82rem;color:var(--ink-2);white-space:nowrap;min-width:10.5ch;text-align:right}
+.layer-read b{font-size:1.25rem;color:var(--ink);font-weight:600}
+.slider-box{position:relative;padding-block:6px 30px}
+.slider-box input{width:100%;margin:0;accent-color:var(--lora);height:22px;position:relative;z-index:2;background:transparent}
+.ruler{position:absolute;left:0;right:0;top:34px;height:26px;font-family:var(--mono);font-size:.68rem;color:var(--muted);pointer-events:none}
+.ruler .band{position:absolute;top:-24px;height:14px;background:color-mix(in srgb,var(--lora) 16%,transparent);border-radius:4px}
+.ruler .band-label{position:absolute;top:2px;transform:translateX(-50%);white-space:nowrap;color:var(--lora-ink)}
+.ruler .entry{position:absolute;top:-27px;width:2px;height:20px;background:var(--ink-2);transform:translateX(-1px)}
+.ruler .entry-label{position:absolute;top:2px;transform:translateX(-50%);white-space:nowrap;color:var(--ink-2)}
+.ruler .end{position:absolute;top:2px}
+.panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,21rem),1fr));gap:16px}
+.panel{border:1px solid var(--rule);border-radius:14px;overflow:hidden;background:#FAFBFC}
+.panel-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:12px 14px 10px;border-bottom:1px solid var(--rule)}
+.panel-name{font-family:var(--display);font-weight:650;font-size:1rem}
+.panel[data-mode="lora"] .panel-name{color:var(--lora-ink)}
+.panel-count{font-family:var(--mono);font-size:.78rem;color:var(--muted);white-space:nowrap}
+.panel-count b{font-size:1.35rem;color:var(--ink);font-weight:600}
+.panel[data-mode="lora"] .panel-count b{color:var(--lora)}
+.rows{padding:8px 10px 6px;display:grid;gap:2px}
+.row{display:grid;grid-template-columns:2.2ch 1fr 1fr;gap:8px;align-items:center;font-family:var(--mono);font-size:.8rem;line-height:1;position:relative}
+.row .ln{color:var(--muted);text-align:right;font-size:.7rem}
+.row code{font-size:inherit;padding:4px 8px;border-radius:6px;color:var(--muted);background:transparent;transition:background-color .18s,color .18s;white-space:nowrap}
+.row.on .a{background:var(--chainA-soft);color:var(--chainA)}
+.row.on .b{background:var(--chainB-soft);color:var(--chainB)}
+.row.front::before{content:"";position:absolute;left:-10px;top:3px;bottom:3px;width:3px;border-radius:2px;background:var(--frozen)}
+.panel[data-mode="lora"] .row.front::before{background:var(--lora)}
+.query{margin:6px 10px 10px;padding:8px 10px;border-radius:8px;border:1px dashed var(--rule);display:flex;justify-content:space-between;gap:10px;font-family:var(--mono);font-size:.8rem;color:var(--muted);transition:all .2s}
+.query.on{border-style:solid;border-color:var(--lora);color:var(--lora-ink);background:var(--lora-soft)}
+.panel-foot{padding:10px 14px;border-top:1px solid var(--rule);font-size:.86rem;color:var(--ink-2);display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.panel-foot b{font-family:var(--mono);font-weight:600;color:var(--ink)}
+.spark-wrap{display:grid;gap:8px}
+.spark-legend{display:flex;gap:18px;flex-wrap:wrap;font-family:var(--mono);font-size:.72rem;color:var(--ink-2)}
+.key{display:inline-flex;align-items:center;gap:7px}
+.key i{display:inline-block;width:18px;height:3px;border-radius:2px}
+.relay-note{font-size:.92rem;color:var(--ink-2);max-width:52rem}
+
+/* ---------- stats ---------- */
+.stats{display:flex;flex-wrap:wrap;gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:16px;overflow:hidden;margin-block:34px 10px}
+.stat{flex:1 1 11.5rem;background:var(--surface);padding:18px 18px 16px;display:grid;gap:6px;align-content:start}
+.stat b{font-family:var(--display);font-weight:800;font-size:clamp(1.55rem,2.6vw,2rem);letter-spacing:-.02em;line-height:1.05;font-variant-numeric:tabular-nums}
+.stat b .to{color:var(--muted);font-weight:500;margin-inline:.12em}
+.stat b .hi{color:var(--lora)}
+.stat span{font-size:.9rem;line-height:1.35;color:var(--ink-2)}
+
+/* ---------- sections ---------- */
+.section{padding-block:clamp(52px,7vw,92px) 0}
+.sec-head{max-width:var(--measure);margin:0 auto 22px;display:grid;gap:10px}
+.sec-num{font-family:var(--mono);font-size:.76rem;letter-spacing:.14em;text-transform:uppercase;color:var(--lora-ink)}
+.sec-head h2{font-size:clamp(1.7rem,3.2vw,2.45rem);line-height:1.08;letter-spacing:-.025em}
+.fig{margin:30px auto 0;max-width:var(--wide);display:grid;gap:12px}
+.fig.narrow{max-width:52rem}
+.fig figcaption{max-width:var(--measure);margin-inline:auto;font-size:.9rem;line-height:1.5;color:var(--muted)}
+.fig figcaption b{color:var(--ink-2);font-weight:500}
+.card{background:var(--surface);border:1px solid var(--rule);border-radius:16px;padding:clamp(12px,2vw,22px);box-shadow:var(--shadow)}
+.plate{background:var(--plate);border:1px solid var(--rule);border-radius:14px;padding:clamp(8px,1.4vw,16px);box-shadow:var(--shadow)}
+.plate img{display:block;width:100%;height:auto}
+.chart{position:relative;width:100%}
+.chart svg{display:block;width:100%;overflow:visible}
+.chart text{font-family:var(--mono);font-size:11px;fill:var(--muted)}
+.chart .tick line,.chart .grid{stroke:var(--rule);stroke-width:1}
+.chart .axis-title{font-size:11.5px;fill:var(--ink-2)}
+.chart .lbl{font-size:11.5px;font-weight:500}
+.tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--paper);font-family:var(--mono);font-size:.74rem;line-height:1.35;
+  padding:7px 9px;border-radius:8px;white-space:nowrap;transform:translate(-50%,calc(-100% - 12px));opacity:0;transition:opacity .12s;z-index:5}
+.tip.show{opacity:1}
+.legend{display:flex;flex-wrap:wrap;gap:8px 16px;font-family:var(--mono);font-size:.74rem;color:var(--ink-2);margin-bottom:10px}
+.toggle{display:inline-flex;align-items:center;gap:8px;font:inherit;color:inherit;background:transparent;border:1px solid var(--rule);border-radius:999px;padding:6px 11px;cursor:pointer}
+.toggle[aria-pressed="false"]{opacity:.45}
+.toggle i{display:inline-block;width:14px;height:3px;border-radius:2px}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,30rem),1fr));gap:18px;align-items:start}
+.panel-title{font-family:var(--display);font-weight:650;font-size:1rem;margin-bottom:6px}
+.panel-sub{font-size:.86rem;color:var(--muted);margin-bottom:10px}
+
+/* tabs */
+.tabs{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
+.tab{font-family:var(--mono);font-size:.78rem;letter-spacing:.02em;border:1px solid var(--rule);background:var(--surface);color:var(--ink-2);padding:8px 14px;border-radius:999px;cursor:pointer}
+.tab[aria-selected="true"]{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+
+/* facts list */
+.facts{list-style:none;padding:0;margin:0;display:grid;gap:12px}
+.facts li{display:grid;grid-template-columns:auto 1fr;gap:12px;align-items:baseline;color:var(--ink-2)}
+.facts li::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--lora);transform:translateY(-2px)}
+
+/* table */
+.tbl-wrap{overflow-x:auto}
+table.cmp{width:100%;border-collapse:collapse;font-size:.95rem;font-variant-numeric:tabular-nums}
+.cmp th,.cmp td{padding:9px 12px;border-bottom:1px solid var(--rule);text-align:center;white-space:nowrap}
+.cmp th:first-child,.cmp td:first-child{text-align:left}
+.cmp thead th{font-family:var(--mono);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:500}
+.cmp td.good{color:var(--lora-ink);font-weight:600}
+.cmp td.chance{color:var(--muted)}
+.cmp tbody tr:last-child td{border-bottom:none}
+
+/* cite */
+.cite{max-width:var(--measure);margin-inline:auto;position:relative}
+.cite pre{margin:0;background:var(--surface);border:1px solid var(--rule);border-radius:14px;padding:18px 18px;overflow-x:auto;font-family:var(--mono);font-size:.82rem;line-height:1.6;color:var(--ink-2)}
+.copy{position:absolute;top:10px;right:10px}
+footer{max-width:var(--wide);margin:clamp(60px,8vw,110px) auto 0;padding-block:24px 40px;border-top:1px solid var(--rule);display:flex;flex-wrap:wrap;gap:10px 28px;justify-content:space-between;font-family:var(--mono);font-size:.76rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-in">
+    <a class="brand" href="#top">Stop Thinking <span>Too Early</span></a>
+    <nav class="toplinks" aria-label="Sections">
+      <a href="#video">Video</a><a href="#relay">Relay</a><a href="#failure">Failure</a><a href="#fix">Fix</a><a href="#why">Why</a><a href="#where">Where</a><a href="#qa">QA</a><a href="#cite">Cite</a>
+      <a class="pdf" href="assets/paper.pdf" target="_blank" rel="noopener">Paper</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero wrap">
+    <div class="eyebrow"><b>Preprint</b><span>2026</span><span>Mechanistic interpretability · Looped transformers</span></div>
+    <h1>Transformers Stop Thinking Too Early, and a <span class="fix">Tiny LoRA</span> Fixes&nbsp;It</h1>
+    <div class="byline">
+      <div class="authors"><span>Zehao Jin</span><span>Ruixuan Deng</span><span>Junran Wang</span></div>
+      <div class="affil">Georgia Institute of Technology</div>
+      <div class="contact" title="Correspondence">zehao@gatech.edu</div>
+    </div>
+    <div class="actions">
+      <a class="btn primary" href="assets/paper.pdf" target="_blank" rel="noopener">Paper <small>PDF</small></a>
+      <a class="btn" href="https://arxiv.org/abs/2609.36585" target="_blank" rel="noopener">arXiv <small>2609.36585</small></a>
+      <a class="btn" href="https://youtu.be/zauTNrrZQW8" target="_blank" rel="noopener">Video <small>YouTube</small></a>
+      <a class="btn" href="https://www.bilibili.com/video/BV1Ymad68Eof" target="_blank" rel="noopener">视频 <small>Bilibili</small></a>
+      <a class="btn" href="https://github.com/Lunamos/stop-thinking-too-early" target="_blank" rel="noopener">Code <small>GitHub</small></a>
+      <a class="btn" href="#cite">BibTeX</a>
+    </div>
+    <p class="lede">Give a pretrained transformer a chain of references in its prompt, <code>K = apple</code>, <code>B = K</code>, <code>D = B</code>, …, <code>print(D)</code>, and ask for the answer directly. Every model we tried follows only a few lines and then guesses, whatever its size. The weights can do far more: <em>one rank-8 LoRA at one early layer</em>, under 0.01% of the parameters, lets Qwen3-8B follow 50-line chains in a single pass and lets a looped model follow at least 160.</p>
+  </section>
+
+  <section class="video wrap" id="video" aria-label="Video">
+    <div class="video-frame">
+      <iframe src="https://www.youtube-nocookie.com/embed/zauTNrrZQW8" title="Transformers Stop Thinking Too Early — video" loading="lazy" allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+    </div>
+    <div class="video-cn">
+      <p>中文讲解：大模型内部的思考，为什么到一半层就停了？</p>
+      <a class="btn cn" href="https://www.bilibili.com/video/BV1Ymad68Eof" target="_blank" rel="noopener">在 Bilibili 观看中文视频 →</a>
+    </div>
+  </section>
+
+  <section class="relay wrap" id="relay" aria-labelledby="relay-title">
+    <div class="relay-card">
+      <div class="relay-head">
+        <h2 id="relay-title">Watch the relay</h2>
+        <p>Qwen3-8B reads a program with two chains of sixteen lines. A line lights up once its hidden state tells which chain it belongs to. Drag through the 36 layers, frozen and with the LoRA.</p>
+      </div>
+      <div class="controls">
+        <button class="play" id="relay-play" type="button" aria-label="Play through the layers">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path id="play-icon" d="M4 2.5v11l9-5.5z"></path></svg>
+        </button>
+        <div class="slider-box">
+          <label for="relay-layer" class="mono" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Layer</label>
+          <input id="relay-layer" type="range" min="0" max="35" step="1" value="22">
+          <div class="ruler" id="relay-ruler" aria-hidden="true"></div>
+        </div>
+        <div class="layer-read">after layer <b id="layer-num">22</b></div>
+      </div>
+      <div class="panels">
+        <div class="panel" data-mode="frozen">
+          <div class="panel-top"><span class="panel-name">Frozen Qwen3-8B</span><span class="panel-count">line <b class="tnum" data-count>4</b> / 16</span></div>
+          <div class="rows" data-rows></div>
+          <div class="query" data-query><span>print(E)</span><span data-out>Output: ?</span></div>
+          <div class="panel-foot"><span>Exact accuracy, 16-line chains</span><b>15.5%</b></div>
+        </div>
+        <div class="panel" data-mode="lora">
+          <div class="panel-top"><span class="panel-name">+ rank-8 LoRA at layer 14</span><span class="panel-count">line <b class="tnum" data-count>16</b> / 16</span></div>
+          <div class="rows" data-rows></div>
+          <div class="query" data-query><span>print(E)</span><span data-out>Output: apple</span></div>
+          <div class="panel-foot"><span>Exact accuracy, 16-line chains</span><b>98.5%</b></div>
+        </div>
+      </div>
+      <div class="spark-wrap">
+        <div class="spark-legend"><span class="key"><i style="background:var(--frozen)"></i>frozen</span><span class="key"><i style="background:var(--lora)"></i>with the LoRA</span><span>furthest readable line after each layer</span></div>
+        <div class="chart" id="spark"></div>
+      </div>
+      <p class="relay-note">Measured, not simulated: a linear read-out at each line's pointer, fitted on 450 programs and scored on 150, counts a line as readable at 75% accuracy. Frozen, the relay reaches line 4 at layer 17 and stops. With the LoRA it runs through layers 16 to 22 to the last line, and the question can read it from layer 22.</p>
+    </div>
+  </section>
+
+  <section class="wrap" aria-label="Results in numbers">
+    <div class="stats">
+      <div class="stat"><b class="tnum">15.5%<span class="to">→</span><span class="hi">99%</span></b><span>exact accuracy on 24-line chains, Qwen3-8B, one pass</span></div>
+      <div class="stat"><b class="tnum"><span class="hi">50</span> lines</b><span>followed in one pass by a LoRA trained on longer programs</span></div>
+      <div class="stat"><b class="tnum">≥<span class="hi">160</span> lines</b><span>followed by Ouro-1.4B after eight loops</span></div>
+      <div class="stat"><b class="tnum">65,537</b><span>trained parameters, under 0.01% of Qwen3-8B</span></div>
+      <div class="stat"><b class="tnum"><span class="hi">+9.4</span> to <span class="hi">+17.9</span></b><span>MuSiQue exact-match points from an early-layer LoRA</span></div>
+    </div>
+  </section>
+
+  <section class="section wrap" id="failure" aria-labelledby="failure-title">
+    <div class="sec-head"><div class="sec-num">1 · The failure</div><h2 id="failure-title">Every model stops after a few lines</h2></div>
+    <div class="prose">
+      <p>Thirteen base models from 0.6B to 32B parameters, with 16 to 64 layers, follow only <strong>1.4 to 3.6 lines</strong> reliably. Depth does not help: OLMo-3-32B has twice the layers of OLMo-3-7B and both reach about 2.6 lines. DeepSeek-V4-Flash (292B MoE) reaches 4.0 lines and is near chance by six.</p>
+      <p>Looped models, which run their layers again, do not escape it. Ouro-1.4B gains one or two lines from its second loop and almost nothing after that: its reach is 0, 1.6, 2.3, 2.2 and 2.2 lines after one to five loops.</p>
+    </div>
+    <figure class="fig narrow">
+      <div class="card">
+        <div class="legend" id="failure-legend"></div>
+        <div class="chart" id="chart-failure"></div>
+      </div>
+      <figcaption><b>Accuracy against chain length</b> on programs with three chains, as the model's choice among the three root values (chance 1/3). Hover or tap a grey line to see which model it is.</figcaption>
+    </figure>
+  </section>
+
+  <section class="section wrap" id="fix" aria-labelledby="fix-title">
+    <div class="sec-head"><div class="sec-num">2 · The fix</div><h2 id="fix-title">One rank-8 LoRA at one layer</h2></div>
+    <div class="prose">
+      <p>We add a rank-8 LoRA to the residual stream at the input of one early layer, <code>h ← s·h + BAh</code>, and train only <code>A</code>, <code>B</code> and <code>s</code>. A penalty keeps the model's predictions on ordinary text: WikiText perplexity goes from 10.14 to 10.148. Every weight of the model stays frozen.</p>
+      <p>Qwen3-8B then answers <strong>24-line chains 99% of the time instead of 15.5%</strong>. A LoRA trained on longer programs answers 98% of 40-line and 88% of 48-line chains. In looped models every loop now counts: Ouro-1.4B follows 60 lines after four loops and at least 160 after eight, and re-running Qwen3-8B's layers 14 to 22 with the LoRA lifts 64-line chains from 34% to 92%.</p>
+    </div>
+    <figure class="fig">
+      <div class="two">
+        <div class="card">
+          <div class="panel-title">Reach, frozen and with the LoRA</div>
+          <div class="panel-sub">Longest chain followed with at least 80% accuracy, two chains; log scale</div>
+          <div class="chart" id="chart-reach"></div>
+        </div>
+        <div class="card">
+          <div class="panel-title">Ouro-1.4B: loops pay once the relay is on</div>
+          <div class="panel-sub">Reach against the number of loops at inference; open circles are lower bounds</div>
+          <div class="legend" id="loops-legend"></div>
+          <div class="chart" id="chart-loops"></div>
+        </div>
+      </div>
+      <figcaption><b>A tiny change, large gains.</b> Qwen3-8B uses exact accuracy for both bars; Ouro and Huginn use the choice between the two roots. The 24-line evaluations mark every tested length as answered; the LoRA trained on up to 40 lines is evaluated through 160 lines.</figcaption>
+    </figure>
+  </section>
+
+  <section class="section wrap" id="why" aria-labelledby="why-title">
+    <div class="sec-head"><div class="sec-num">3 · Why it works</div><h2 id="why-title">A relay in the middle layers</h2></div>
+    <div class="prose">
+      <p>By default each line passes on which chain it belongs to for only two or three lines, the question resolves one or two more pointers itself, and a late layer copies the answer. With the LoRA, every line passes its chain on. This relay runs in one short range of middle layers: <strong>layers 16 to 22 of Qwen3-8B</strong>, and layers 7 to 15 of every loop of Ouro.</p>
+      <ul class="facts">
+        <li><span>In each of these layers, attention from a line reaches a little further up its own chain. Frozen heads that read only the parent line take over the longer reads.</span></li>
+        <li><span>Cutting each line's attention to its parent line in layers 14 to 22 returns 6-, 8- and 12-line chains to chance (53, 48 and 55%). The same cut after the relay leaves 100, 100 and 98%.</span></li>
+        <li><span>Removing the ten heads that read the parent line drops 16-line accuracy from 89% to 53%; ten random heads from the same layers leave 83%.</span></li>
+        <li><span>Small looped transformers trained from scratch on these programs learn the same relay.</span></li>
+      </ul>
+    </div>
+    <figure class="fig">
+      <div class="tabs" role="tablist" aria-label="Mechanism figures">
+        <button class="tab" role="tab" type="button" aria-selected="true" aria-controls="why-fig" data-tab="0">The computation</button>
+        <button class="tab" role="tab" type="button" aria-selected="false" aria-controls="why-fig" data-tab="1">Layer by layer</button>
+        <button class="tab" role="tab" type="button" aria-selected="false" aria-controls="why-fig" data-tab="2">Across loops</button>
+      </div>
+      <div class="plate" id="why-fig" role="tabpanel"><img id="why-img" src="assets/fig-default-main.png" alt="Schematic of the default and LoRA computation, and the relay front per layer and per loop" width="1620" height="792"></div>
+      <figcaption id="why-cap"><b>The LoRA extends a relay that runs in the same middle layers.</b> (a, b) Qwen3-8B's default and LoRA computation: program lines carry chain identity; by default the question follows the remaining pointers itself, with the LoRA it reads the relay; late layers copy the value. (c, d) The longest prefix of lines whose chain is decoded at 75% accuracy, after each layer of Qwen3-8B and Llama-3.1-8B, and across four loops of Ouro-1.4B.</figcaption>
+    </figure>
+  </section>
+
+  <section class="section wrap" id="where" aria-labelledby="where-title">
+    <div class="sec-head"><div class="sec-num">4 · Where to put it</div><h2 id="where-title">Early enough to start the relay</h2></div>
+    <div class="prose">
+      <p>The LoRA works only while it can still start the relay. In Qwen3-8B, moving it from layer 20 to layer 21 drops reach from 20.5 to 5.2 lines. A measurement on the frozen model, the <strong>cutoff layer</strong>, located this limit in advance for three of four held-out models, within a preregistered tolerance.</p>
+      <p>Place matters far more than form. At layer 14, four different small changes all extend the chain; at layer 26, after the relay's layers, all four stay at chance.</p>
+    </div>
+    <figure class="fig">
+      <div class="plate"><img src="assets/fig-placement.png" alt="Reach against the layer of the LoRA in nine models, and the frozen cutoff layer against the measured limit" width="1620" height="624" loading="lazy"></div>
+      <figcaption><b>A model-specific layer separates working and failing placements.</b> (a) Reach of independently trained rank-8 LoRAs against their layer relative to depth. (b) The frozen-model cutoff layer against the measured limit in nine models; filled markers are held-out models.</figcaption>
+    </figure>
+    <figure class="fig narrow">
+      <div class="card tbl-wrap">
+        <table class="cmp">
+          <thead><tr><th scope="col">Change to Qwen3-8B</th><th scope="col">Parameters</th><th scope="col">Layer 14</th><th scope="col">Layer 26</th></tr></thead>
+          <tbody>
+            <tr><td>LoRA on the residual stream</td><td>65,537</td><td class="good">96.5</td><td class="chance">54.5</td></tr>
+            <tr><td>Projection LoRA (all seven projections)</td><td>606,208</td><td class="good">90.0</td><td class="chance">52.5</td></tr>
+            <tr><td>FLAS-style low-rank flow, 3 steps</td><td>65,872</td><td class="good">94.0</td><td class="chance">54.0</td></tr>
+            <tr><td>FLAS flow block, 1 step</td><td>168M</td><td class="good">95.5</td><td class="chance">56.0</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <figcaption><b>Exact accuracy (%) on 24-line, two-chain programs</b>, 200 programs per cell, every change trained the same way. Answering one of the two root values at random gives 50%.</figcaption>
+    </figure>
+  </section>
+
+  <section class="section wrap" id="qa" aria-labelledby="qa-title">
+    <div class="sec-head"><div class="sec-num">5 · Beyond programs</div><h2 id="qa-title">Multi-hop questions</h2></div>
+    <div class="prose">
+      <p>On chains of fictional facts, a Qwen3-8B LoRA raises exact match from <strong>41.2% to 97.4%</strong>, and six-hop questions, longer than any in training, from 23% to 88%. On MuSiQue, a LoRA trained on the benchmark at the earliest layer tested adds 11.4, 9.4 and 17.9 exact-match points to Qwen3-8B, OLMo-3-7B and Llama-3.1-8B, and 11.7 to Ouro-1.4B. At the latest layer tested it adds little in the standard models.</p>
+    </div>
+    <figure class="fig narrow">
+      <div class="card">
+        <div class="legend"><span class="key"><i style="background:var(--lora)"></i>LoRA at the earliest layer tested</span><span class="key"><i style="background:var(--frozen)"></i>LoRA at the latest layer tested</span></div>
+        <div class="chart" id="chart-qa"></div>
+      </div>
+      <figcaption><b>MuSiQue exact-match gain over the frozen model</b>, 900 development questions with their paragraphs (Ouro: 300, four loops), with paired 95% bootstrap intervals. Layers 6 and 30 of Qwen3-8B, 4 and 28 of OLMo-3-7B and Llama-3.1-8B, and 6 and 20 of Ouro's loop body applied in every loop, where a late LoRA still comes before the next loop's middle layers.</figcaption>
+    </figure>
+  </section>
+
+  <section class="section wrap" id="cite" aria-labelledby="cite-title">
+    <div class="sec-head"><div class="sec-num">Citation</div><h2 id="cite-title">BibTeX</h2></div>
+    <div class="cite">
+      <pre id="bibtex">@article{jin2026thinking,
+  title   = {Transformers Stop Thinking Too Early, and a Tiny {LoRA} Fixes It},
+  author  = {Jin, Zehao and Deng, Ruixuan and Wang, Junran},
+  journal = {arXiv preprint arXiv:2609.36585},
+  year    = {2026},
+  url     = {https://arxiv.org/abs/2609.36585}
+}</pre>
+      <button class="btn copy" id="copy-bib" type="button">Copy</button>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <span>Zehao Jin · Ruixuan Deng · Junran Wang · Georgia Institute of Technology</span>
+  <span>Correspondence: <span style="user-select:all">zehao@gatech.edu</span></span>
+</footer>
+
+<script>
+(function(){
+"use strict";
+const NS = "http://www.w3.org/2000/svg";
+const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+function S(tag, attrs, parent){ const e = document.createElementNS(NS, tag); if (attrs) for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+function lin(d0, d1, r0, r1){ return v => r0 + (v - d0) / (d1 - d0) * (r1 - r0); }
+function log2s(d0, d1, r0, r1){ const a = Math.log2(d0), b = Math.log2(d1); return v => r0 + (Math.log2(v) - a) / (b - a) * (r1 - r0); }
+function fmt(v, d){ return (Math.round(v * Math.pow(10, d)) / Math.pow(10, d)).toFixed(d); }
+function tipFor(host){ let t = host.querySelector(".tip"); if (!t){ t = document.createElement("div"); t.className = "tip"; t.setAttribute("role", "status"); host.appendChild(t); } return t; }
+function showTip(host, x, y, html){ const t = tipFor(host); t.innerHTML = html; const w = host.clientWidth; t.style.left = Math.max(60, Math.min(w - 60, x)) + "px"; t.style.top = y + "px"; t.classList.add("show"); }
+function hideTip(host){ const t = host.querySelector(".tip"); if (t) t.classList.remove("show"); }
+function onResize(el, draw){ let w = 0; const ro = new ResizeObserver(() => { const nw = Math.round(el.clientWidth); if (nw && nw !== w){ w = nw; draw(nw); } }); ro.observe(el); }
+
+/* ------------------------------------------------------------------ data (from the paper's figure data) */
+const FROZEN = [1,2,2,2,2,2,2,2,2,3,2,2,2,3,3,3,3,4,4,4,4,4,4,4,4,4,4,4,4,3,3,3,3,3,3,3];
+const LORA   = [1,2,2,2,2,2,2,2,2,3,2,2,2,3,3,3,5,6,6,8,9,13,16,16,16,16,16,16,16,16,16,16,16,16,16,16];
+const QUERY_FROM = 22, ENTRY = 14, BAND = [16, 22];
+const A = ["K","B","D","F","H","J","L","N","P","R","T","V","X","Z","C","E"];
+const Bn = ["m","q","s","u","w","y","g","i","o","a","b","d","f","h","j","k"];
+
+const MODELS = [ // three-chain choice accuracy at 1..6 lines; layers; reach
+  ["Qwen3-0.6B",28,1.40,[0.99,0.515,0.345,0.355,0.25,0.385]],
+  ["Qwen3-1.7B",28,1.83,[0.995,0.76,0.395,0.35,0.265,0.32]],
+  ["Qwen3-4B",36,1.85,[0.995,0.765,0.505,0.36,0.345,0.355]],
+  ["Qwen3-8B",36,3.12,[1,0.98,0.835,0.54,0.415,0.315]],
+  ["Qwen3-14B",40,3.55,[1,0.945,0.935,0.69,0.48,0.335]],
+  ["Llama-3.2-1B",16,1.38,[0.985,0.5,0.41,0.295,0.3,0.365]],
+  ["Llama-3.2-3B",28,1.88,[0.985,0.775,0.465,0.275,0.285,0.38]],
+  ["Llama-3.1-8B",32,2.05,[0.99,0.815,0.495,0.32,0.285,0.285]],
+  ["OLMo-3-7B",32,2.58,[1,0.95,0.69,0.375,0.405,0.365]],
+  ["OLMo-3-32B",64,2.61,[1,0.99,0.68,0.435,0.385,0.335]],
+  ["Gemma-3-4B",34,2.16,[1,0.85,0.54,0.36,0.37,0.32]],
+  ["Gemma-3-12B",48,3.45,[0.995,0.98,0.945,0.62,0.385,0.34]],
+  ["Gemma-3-27B",62,3.60,[1,1,0.96,0.695,0.455,0.36]]
+];
+const DSV4 = {name:"DeepSeek-V4-Flash (292B MoE)", x:[1,2,3,4,5,6,8], y:[1,0.99,0.97,0.81,0.53,0.42,0.38]};
+const OURO4 = {name:"Ouro-1.4B, 4 loops", x:[1,2,3,4,5,6,8], y:[1,0.85,0.553,0.39,0.32,0.347,0.343]};
+const OURO8 = {name:"Ouro-1.4B, 8 loops", x:[1,2,3,4,5,6,8], y:[0.983,0.817,0.537,0.42,0.327,0.343,0.373]};
+
+const REACH = [ // frozen, with LoRA, lower bound?
+  {name:"Qwen3-8B", sub:"one pass", f:2.52, m:50.4, lb:false},
+  {name:"Ouro-1.4B", sub:"four loops", f:2.50, m:60, lb:false},
+  {name:"Ouro-1.4B", sub:"eight loops", f:2.21, m:160, lb:true},
+  {name:"Huginn", sub:"16 recurrences", f:1.36, m:57.6, lb:false}
+];
+const LOOPS = [ // Ouro-1.4B reach by loops; 0 reach plotted at the axis floor; lb = lower bound
+  {key:"frozen", name:"Frozen", color:"var(--frozen)", dash:"5 4", x:[1,2,3,4,6,8], y:[0,1.9,2.29,2.5,2.3,2.21], lb:[]},
+  {key:"vector", name:"Steering vector", color:"var(--sky)", dash:"", x:[1,2,3,4,6,8], y:[0,2.93,6.15,7.12,6.76,6.33], lb:[]},
+  {key:"lora", name:"LoRA, every loop", color:"var(--lora)", dash:"", x:[1,2,3,4,6,8], y:[1.93,7.1,16.96,24,24,24], lb:[3,4,5]},
+  {key:"first", name:"LoRA, first loop only", color:"var(--chainB)", dash:"", x:[1,2,3,4,6,8], y:[0,9.49,21.52,24,24,24], lb:[3,4,5]},
+  {key:"long", name:"LoRA trained on 40 lines", color:"var(--violet)", dash:"", x:[2,3,4,6,8,12], y:[7.43,24.64,60,145.45,160,20], lb:[4]}
+];
+const QA = [ // frozen EM; early [gain, lo, hi]; late [gain, lo, hi]
+  {name:"Qwen3-8B", f:52.9, e:[11.4,8.6,14.3], l:[-1.6,-4.2,1.2], el:"layer 6", ll:"layer 30"},
+  {name:"OLMo-3-7B", f:54.4, e:[9.4,6.2,12.6], l:[-3.3,-6.3,-0.7], el:"layer 4", ll:"layer 28"},
+  {name:"Llama-3.1-8B", f:46.8, e:[17.9,14.4,21.4], l:[2.0,-0.8,4.9], el:"layer 4", ll:"layer 28"},
+  {name:"Ouro-1.4B", f:48.3, e:[11.7,6.0,17.3], l:[7.0,1.0,13.0], el:"layer 6", ll:"layer 20", sub:"4 loops"}
+];
+
+/* ------------------------------------------------------------------ relay explorable */
+const panels = Array.from(document.querySelectorAll(".panel"));
+panels.forEach(p => {
+  const rows = p.querySelector("[data-rows]");
+  for (let i = 0; i < 16; i++){
+    const r = document.createElement("div"); r.className = "row";
+    const lhsA = A[i], rhsA = i === 0 ? "apple" : A[i-1];
+    const lhsB = Bn[i], rhsB = i === 0 ? "pear" : Bn[i-1];
+    r.innerHTML = '<span class="ln">' + (i+1) + '</span><code class="a">' + lhsA + ' = ' + rhsA + '</code><code class="b">' + lhsB + ' = ' + rhsB + '</code>';
+    rows.appendChild(r);
+  }
+});
+const slider = document.getElementById("relay-layer");
+const layerNum = document.getElementById("layer-num");
+function renderRelay(L){
+  layerNum.textContent = L;
+  panels.forEach(p => {
+    const arr = p.dataset.mode === "lora" ? LORA : FROZEN;
+    const front = arr[L];
+    p.querySelectorAll(".row").forEach((r, i) => { r.classList.toggle("on", i < front); r.classList.toggle("front", i === front - 1); });
+    p.querySelector("[data-count]").textContent = front;
+    const q = p.querySelector("[data-query]"), out = p.querySelector("[data-out]");
+    const reads = p.dataset.mode === "lora" && L >= QUERY_FROM;
+    q.classList.toggle("on", reads);
+    out.textContent = reads ? "Output: apple" : "Output: ?";
+  });
+  drawSparkCursor(L);
+}
+// ruler under the slider
+(function(){
+  const ruler = document.getElementById("relay-ruler");
+  const pct = v => (v / 35 * 100);
+  ruler.innerHTML =
+    '<div class="band" style="left:' + pct(BAND[0] - 0.5) + '%;width:' + (pct(BAND[1] + 0.5) - pct(BAND[0] - 0.5)) + '%"></div>' +
+    '<div class="band-label" style="left:' + pct((BAND[0] + BAND[1]) / 2 + 1) + '%">relay 16–22</div>' +
+    '<div class="entry" style="left:' + pct(ENTRY) + '%"></div>' +
+    '<div class="entry-label" style="left:' + pct(ENTRY - 3.4) + '%">LoRA at 14</div>' +
+    '<div class="end" style="left:0">0</div><div class="end" style="right:0">35</div>';
+})();
+slider.addEventListener("input", () => { stopPlay(); renderRelay(+slider.value); });
+let timer = null;
+const playBtn = document.getElementById("relay-play"), playIcon = document.getElementById("play-icon");
+function setIcon(playing){ playIcon.setAttribute("d", playing ? "M4 2.5h3v11H4zM9 2.5h3v11H9z" : "M4 2.5v11l9-5.5z"); playBtn.setAttribute("aria-label", playing ? "Pause" : "Play through the layers"); }
+function stopPlay(){ if (timer){ clearInterval(timer); timer = null; setIcon(false); } }
+playBtn.addEventListener("click", () => {
+  if (timer){ stopPlay(); return; }
+  let L = +slider.value; if (L >= 35) L = 0;
+  setIcon(true);
+  const step = () => { slider.value = L; renderRelay(L); if (L >= 35){ stopPlay(); return; } L++; };
+  step(); timer = setInterval(step, reduceMotion ? 450 : 170);
+});
+
+// sparkline of the relay front
+let sparkState = null;
+function drawSpark(W){
+  const host = document.getElementById("spark");
+  host.querySelectorAll("svg").forEach(s => s.remove());
+  const H = Math.max(120, Math.min(170, W * 0.16)), m = {l: 30, r: 10, t: 10, b: 26};
+  const x = lin(0, 35, m.l, W - m.r), y = lin(0, 16, H - m.b, m.t);
+  const svg = S("svg", {viewBox: "0 0 " + W + " " + H, height: H, role: "img", "aria-label": "Furthest readable line after each layer, frozen and with the LoRA"}, host);
+  const band = S("rect", {x: x(BAND[0] - 0.5), y: m.t, width: x(BAND[1] + 0.5) - x(BAND[0] - 0.5), height: H - m.b - m.t, rx: 3}, svg);
+  band.style.fill = "color-mix(in srgb, var(--lora) 11%, transparent)";
+  [0, 4, 8, 12, 16].forEach(v => { S("line", {x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid"}, svg); const t = S("text", {x: m.l - 7, y: y(v) + 3.5, "text-anchor": "end"}, svg); t.textContent = v; });
+  [0, 7, 14, 21, 28, 35].forEach(v => { const t = S("text", {x: x(v), y: H - 8, "text-anchor": "middle"}, svg); t.textContent = v; });
+  const step = arr => { let d = "M" + x(-0.5) + "," + y(arr[0]); arr.forEach((v, i) => { d += "L" + x(i - 0.5) + "," + y(v) + "L" + x(i + 0.5) + "," + y(v); }); return d; };
+  const pf = S("path", {d: step(FROZEN), fill: "none", "stroke-width": 2.2, "stroke-dasharray": "5 4"}, svg); pf.style.stroke = "var(--frozen)";
+  const pl = S("path", {d: step(LORA), fill: "none", "stroke-width": 2.6}, svg); pl.style.stroke = "var(--lora)";
+  const cur = S("line", {y1: m.t - 2, y2: H - m.b, "stroke-width": 1.5}, svg); cur.style.stroke = "var(--ink)";
+  const df = S("circle", {r: 4}, svg); df.style.fill = "var(--frozen)";
+  const dl = S("circle", {r: 4.5}, svg); dl.style.fill = "var(--lora)";
+  sparkState = {x, y, cur, df, dl};
+  // click / drag on the sparkline moves the slider
+  const pick = ev => { const r = svg.getBoundingClientRect(); const px = (ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left; const L = Math.max(0, Math.min(35, Math.round((px / r.width * W - m.l) / (W - m.l - m.r) * 35))); stopPlay(); slider.value = L; renderRelay(L); };
+  svg.addEventListener("click", pick);
+  drawSparkCursor(+slider.value);
+}
+function drawSparkCursor(L){
+  if (!sparkState) return;
+  const {x, y, cur, df, dl} = sparkState;
+  cur.setAttribute("x1", x(L)); cur.setAttribute("x2", x(L));
+  df.setAttribute("cx", x(L)); df.setAttribute("cy", y(FROZEN[L]));
+  dl.setAttribute("cx", x(L)); dl.setAttribute("cy", y(LORA[L]));
+}
+onResize(document.getElementById("spark"), drawSpark);
+renderRelay(+slider.value);
+
+/* ------------------------------------------------------------------ failure chart */
+(function(){
+  const host = document.getElementById("chart-failure");
+  const legend = document.getElementById("failure-legend");
+  legend.innerHTML =
+    '<span class="key"><i style="background:var(--frozen);opacity:.6"></i>13 base models, 0.6B–32B</span>' +
+    '<span class="key"><i style="background:var(--ink)"></i>DeepSeek-V4-Flash (292B MoE)</span>' +
+    '<span class="key"><i style="background:var(--chainA)"></i>Ouro-1.4B, 4 loops</span>' +
+    '<span class="key"><i style="background:var(--chainA);opacity:.55"></i>Ouro-1.4B, 8 loops</span>';
+  function draw(W){
+    host.querySelectorAll("svg").forEach(s => s.remove());
+    const H = Math.max(260, Math.min(380, W * 0.58)), m = {l: 40, r: 14, t: 12, b: 38};
+    const x = lin(1, 8, m.l, W - m.r), y = lin(0.2, 1.0, H - m.b, m.t);
+    const svg = S("svg", {viewBox: "0 0 " + W + " " + H, height: H, role: "img", "aria-label": "Accuracy against chain length for 13 base models, DeepSeek-V4-Flash and Ouro-1.4B"}, host);
+    [0.2, 0.4, 0.6, 0.8, 1.0].forEach(v => { S("line", {x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid"}, svg); const t = S("text", {x: m.l - 7, y: y(v) + 3.5, "text-anchor": "end"}, svg); t.textContent = v.toFixed(1); });
+    [1, 2, 3, 4, 5, 6, 7, 8].forEach(v => { const t = S("text", {x: x(v), y: H - m.b + 16, "text-anchor": "middle"}, svg); t.textContent = v; });
+    const at = S("text", {x: (m.l + W - m.r) / 2, y: H - 4, "text-anchor": "middle", class: "axis-title"}, svg); at.textContent = "chain length (lines)";
+    const ch = S("line", {x1: m.l, x2: W - m.r, y1: y(1/3), y2: y(1/3), "stroke-dasharray": "2 4", "stroke-width": 1.4}, svg); ch.style.stroke = "var(--muted)";
+    const ct = S("text", {x: W - m.r, y: y(1/3) - 5, "text-anchor": "end"}, svg); ct.textContent = "chance";
+    const pathOf = (xs, ys) => xs.map((v, i) => (i ? "L" : "M") + x(v) + "," + y(ys[i])).join("");
+    const gModels = S("g", {}, svg);
+    const hi = S("path", {fill: "none", "stroke-width": 2.8}, svg); hi.style.stroke = "var(--ink)"; hi.style.display = "none";
+    MODELS.forEach(([name, layers, reach, ys]) => {
+      const d = pathOf([1, 2, 3, 4, 5, 6], ys);
+      const p = S("path", {d, fill: "none", "stroke-width": 1.3, opacity: 0.5}, gModels); p.style.stroke = "var(--frozen)";
+      const hit = S("path", {d, fill: "none", "stroke-width": 12, stroke: "transparent", style: "cursor:pointer"}, gModels);
+      const enter = ev => { hi.setAttribute("d", d); hi.style.display = ""; const r = host.getBoundingClientRect(); const cx = (ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left; const cy = (ev.touches ? ev.touches[0].clientY : ev.clientY) - r.top; showTip(host, cx, cy, "<b>" + name + "</b> · " + layers + " layers<br>reach " + fmt(reach, 1) + " lines"); };
+      hit.addEventListener("mousemove", enter); hit.addEventListener("touchstart", enter, {passive: true});
+      hit.addEventListener("mouseleave", () => { hi.style.display = "none"; hideTip(host); });
+    });
+    const series = [[OURO8, "var(--chainA)", 2, "2 3", 0.6], [OURO4, "var(--chainA)", 2.2, "7 4", 1], [DSV4, "var(--ink)", 2.6, "", 1]];
+    series.forEach(([s, col, w, dash, op]) => {
+      const p = S("path", {d: pathOf(s.x, s.y), fill: "none", "stroke-width": w, "stroke-dasharray": dash, opacity: op}, svg); p.style.stroke = col;
+      s.x.forEach((v, i) => { const c = S("circle", {cx: x(v), cy: y(s.y[i]), r: 3, opacity: op}, svg); c.style.fill = col; });
+    });
+    const lbl = S("text", {x: x(4.12), y: y(0.81) - 7, class: "lbl"}, svg); lbl.textContent = "DeepSeek-V4-Flash"; lbl.style.fill = "var(--ink)";
+    svg.addEventListener("touchend", () => { setTimeout(() => { hi.style.display = "none"; hideTip(host); }, 1600); });
+  }
+  onResize(host, draw);
+})();
+
+/* ------------------------------------------------------------------ reach dumbbell */
+(function(){
+  const host = document.getElementById("chart-reach");
+  function draw(W){
+    host.querySelectorAll("svg").forEach(s => s.remove());
+    const rowH = 58, m = {l: Math.min(150, W * 0.34), r: 22, t: 8, b: 34};
+    const H = m.t + m.b + rowH * REACH.length;
+    const x = log2s(1, 256, m.l, W - m.r);
+    const svg = S("svg", {viewBox: "0 0 " + W + " " + H, height: H, role: "img", "aria-label": "Reach frozen and with the LoRA"}, host);
+    [1, 4, 16, 64, 256].forEach(v => { S("line", {x1: x(v), x2: x(v), y1: m.t, y2: H - m.b, class: "grid"}, svg); const t = S("text", {x: x(v), y: H - m.b + 16, "text-anchor": "middle"}, svg); t.textContent = v; });
+    const at = S("text", {x: (m.l + W - m.r) / 2, y: H - 4, "text-anchor": "middle", class: "axis-title"}, svg); at.textContent = "longest chain followed (lines)";
+    REACH.forEach((r, i) => {
+      const cy = m.t + rowH * i + rowH / 2;
+      const n = S("text", {x: 0, y: cy - 2, class: "lbl"}, svg); n.textContent = r.name; n.style.fill = "var(--ink)";
+      const s = S("text", {x: 0, y: cy + 13}, svg); s.textContent = r.sub;
+      const seg = S("line", {x1: x(r.f), x2: x(r.m), y1: cy, y2: cy, "stroke-width": 3, "stroke-linecap": "round"}, svg); seg.style.stroke = "color-mix(in srgb, var(--lora) 35%, transparent)";
+      const cf = S("circle", {cx: x(r.f), cy, r: 5.5}, svg); cf.style.fill = "var(--frozen)";
+      const cm = S("circle", {cx: x(r.m), cy, r: 7, "stroke-width": 2.5}, svg);
+      if (r.lb){ cm.style.fill = "var(--surface)"; cm.style.stroke = "var(--lora)"; } else { cm.style.fill = "var(--lora)"; cm.style.stroke = "var(--lora)"; }
+      const tf = S("text", {x: x(r.f), y: cy - 11, "text-anchor": "middle"}, svg); tf.textContent = fmt(r.f, 1);
+      const tm = S("text", {x: x(r.m), y: cy - 13, "text-anchor": "middle", class: "lbl"}, svg); tm.textContent = (r.lb ? "≥" : "") + Math.round(r.m); tm.style.fill = "var(--lora-ink)";
+    });
+  }
+  onResize(host, draw);
+})();
+
+/* ------------------------------------------------------------------ loops chart */
+(function(){
+  const host = document.getElementById("chart-loops");
+  const legend = document.getElementById("loops-legend");
+  const visible = {frozen: true, vector: true, lora: true, first: true, long: true};
+  LOOPS.forEach(s => {
+    const b = document.createElement("button"); b.type = "button"; b.className = "toggle"; b.setAttribute("aria-pressed", "true");
+    b.innerHTML = '<i style="background:' + s.color + '"></i>' + s.name;
+    b.addEventListener("click", () => { visible[s.key] = !visible[s.key]; b.setAttribute("aria-pressed", String(visible[s.key])); draw(Math.round(host.clientWidth)); });
+    legend.appendChild(b);
+  });
+  function draw(W){
+    host.querySelectorAll("svg").forEach(s => s.remove());
+    const H = Math.max(250, Math.min(330, W * 0.62)), m = {l: 38, r: 14, t: 16, b: 38};
+    const x = lin(1, 12, m.l, W - m.r), y = log2s(0.8, 256, H - m.b, m.t);
+    const svg = S("svg", {viewBox: "0 0 " + W + " " + H, height: H, role: "img", "aria-label": "Reach of Ouro-1.4B against loops"}, host);
+    [1, 2, 4, 8, 16, 32, 64, 128, 256].forEach(v => { S("line", {x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid"}, svg); const t = S("text", {x: m.l - 7, y: y(v) + 3.5, "text-anchor": "end"}, svg); t.textContent = v; });
+    const z = S("text", {x: m.l - 7, y: y(0.8) + 3.5, "text-anchor": "end"}, svg); z.textContent = "0";
+    [1, 2, 3, 4, 6, 8, 12].forEach(v => { const t = S("text", {x: x(v), y: H - m.b + 16, "text-anchor": "middle"}, svg); t.textContent = v; });
+    const at = S("text", {x: (m.l + W - m.r) / 2, y: H - 4, "text-anchor": "middle", class: "axis-title"}, svg); at.textContent = "loops at inference";
+    const tr = S("line", {x1: x(4), x2: x(4), y1: m.t, y2: H - m.b, "stroke-dasharray": "2 4", "stroke-width": 1.3}, svg); tr.style.stroke = "var(--muted)";
+    const tt = S("text", {x: x(4) + 5, y: m.t + 10}, svg); tt.textContent = "trained with 4";
+    LOOPS.forEach(s => {
+      if (!visible[s.key]) return;
+      const yy = s.y.map(v => Math.max(0.8, v));
+      const p = S("path", {d: s.x.map((v, i) => (i ? "L" : "M") + x(v) + "," + y(yy[i])).join(""), fill: "none", "stroke-width": s.key === "frozen" ? 2 : 2.4, "stroke-dasharray": s.dash}, svg); p.style.stroke = s.color;
+      s.x.forEach((v, i) => {
+        const lb = s.lb.indexOf(i) >= 0;
+        const c = S("circle", {cx: x(v), cy: y(yy[i]), r: lb ? 4.6 : 4, "stroke-width": 2}, svg);
+        c.style.stroke = s.color; c.style.fill = lb ? "var(--surface)" : s.color;
+        const hit = S("circle", {cx: x(v), cy: y(yy[i]), r: 12, fill: "transparent", style: "cursor:pointer"}, svg);
+        const val = s.y[i] === 0 ? "0" : (lb ? "≥" + Math.round(s.y[i]) + " (every tested length)" : fmt(s.y[i], 1));
+        const show = () => showTip(host, x(v), y(yy[i]), "<b>" + s.name + "</b><br>" + v + " loop" + (v > 1 ? "s" : "") + " · reach " + val + " lines");
+        hit.addEventListener("mouseenter", show); hit.addEventListener("touchstart", show, {passive: true}); hit.addEventListener("mouseleave", () => hideTip(host));
+      });
+    });
+  }
+  onResize(host, draw);
+})();
+
+/* ------------------------------------------------------------------ MuSiQue gains */
+(function(){
+  const host = document.getElementById("chart-qa");
+  function draw(W){
+    host.querySelectorAll("svg").forEach(s => s.remove());
+    const H = Math.max(250, Math.min(330, W * 0.5)), m = {l: 38, r: 10, t: 16, b: 52};
+    const y = lin(-7, 24, H - m.b, m.t);
+    const gw = (W - m.l - m.r) / QA.length, bw = Math.min(34, gw * 0.26);
+    const svg = S("svg", {viewBox: "0 0 " + W + " " + H, height: H, role: "img", "aria-label": "MuSiQue exact-match gain for early and late LoRAs"}, host);
+    [-5, 0, 5, 10, 15, 20].forEach(v => { S("line", {x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: "grid"}, svg); const t = S("text", {x: m.l - 7, y: y(v) + 3.5, "text-anchor": "end"}, svg); t.textContent = (v > 0 ? "+" : "") + v; });
+    const zl = S("line", {x1: m.l, x2: W - m.r, y1: y(0), y2: y(0), "stroke-width": 1.4}, svg); zl.style.stroke = "var(--ink-2)";
+    QA.forEach((q, i) => {
+      const cx = m.l + gw * (i + 0.5);
+      [[q.e, cx - bw * 0.62, "var(--lora)", q.el, true], [q.l, cx + bw * 0.62, "var(--frozen)", q.ll, false]].forEach(([g, bx, col, lay, early]) => {
+        const top = y(Math.max(0, g[0])), bot = y(Math.min(0, g[0]));
+        const r = S("rect", {x: bx - bw / 2, y: top, width: bw, height: Math.max(1.5, bot - top), rx: 3}, svg); r.style.fill = col; if (!early) r.style.opacity = 0.75;
+        const e = S("line", {x1: bx, x2: bx, y1: y(g[1]), y2: y(g[2]), "stroke-width": 1.4}, svg); e.style.stroke = "var(--ink)";
+        [g[1], g[2]].forEach(v => { const c = S("line", {x1: bx - 4, x2: bx + 4, y1: y(v), y2: y(v), "stroke-width": 1.4}, svg); c.style.stroke = "var(--ink)"; });
+        const hit = S("rect", {x: bx - bw / 2 - 4, y: m.t, width: bw + 8, height: H - m.b - m.t, fill: "transparent", style: "cursor:pointer"}, svg);
+        const show = () => showTip(host, bx, y(g[2]), "<b>" + q.name + "</b> · LoRA at " + lay + "<br>" + (g[0] > 0 ? "+" : "") + fmt(g[0], 1) + " points [" + fmt(g[1], 1) + ", " + fmt(g[2], 1) + "]");
+        hit.addEventListener("mouseenter", show); hit.addEventListener("touchstart", show, {passive: true}); hit.addEventListener("mouseleave", () => hideTip(host));
+      });
+      const lab = S("text", {x: cx - bw * 0.62, y: y(q.e[2]) - 7, "text-anchor": "middle", class: "lbl"}, svg); lab.textContent = "+" + fmt(q.e[0], 1); lab.style.fill = "var(--lora-ink)";
+      const n = S("text", {x: cx, y: H - m.b + 18, "text-anchor": "middle", class: "lbl"}, svg); n.textContent = q.name; n.style.fill = "var(--ink)";
+      const f = S("text", {x: cx, y: H - m.b + 33, "text-anchor": "middle"}, svg); f.textContent = (q.sub ? q.sub + " · " : "") + "frozen " + fmt(q.f, 1);
+    });
+  }
+  onResize(host, draw);
+})();
+
+/* ------------------------------------------------------------------ mechanism figure tabs */
+(function(){
+  const FIGS = [
+    {src: "assets/fig-default-main.png", w: 1620, h: 792, alt: "Schematic of the default and LoRA computation, and the relay front per layer and per loop",
+     cap: "<b>The LoRA extends a relay that runs in the same middle layers.</b> (a, b) Qwen3-8B's default and LoRA computation: program lines carry chain identity; by default the question follows the remaining pointers itself, with the LoRA it reads the relay; late layers copy the value. (c, d) The longest prefix of lines whose chain is decoded at 75% accuracy, after each layer of Qwen3-8B and Llama-3.1-8B, and across four loops of Ouro-1.4B."},
+    {src: "assets/fig-relay-std.png", w: 1620, h: 576, alt: "Read-outs of each line's chain at every layer, restoration of a redirected pointer, and attention up the chain",
+     cap: "<b>The LoRA changes how the program's own lines carry the chain.</b> Qwen3-8B on sixteen-line chains. (a, b) Read-outs of chain identity at each pointer and at the query, frozen and with the layer-14 LoRA. (c) Restoring the second line's pointer affects progressively later lines, then the query. (d) In interleaved programs, attention reaches further up the same chain through the middle layers."},
+    {src: "assets/fig-mechanism-main.png", w: 1620, h: 552, alt: "Attention up the chain per loop in Ouro-1.4B, frozen and with the LoRA, and reach after attention cuts",
+     cap: "<b>Longer reads use frozen attention, and the relay needs its parent links.</b> Ouro-1.4B. (a, b) Attention to earlier lines of the same chain, frozen and with the LoRA, in each loop. (c) Reach after three loops when lines cannot attend to the stated lines in any layer or loop: cutting the parent link stops the relay; cutting longer reads shortens it."}
+  ];
+  const tabs = Array.from(document.querySelectorAll(".tab"));
+  const img = document.getElementById("why-img"), cap = document.getElementById("why-cap");
+  function select(i){
+    tabs.forEach((t, j) => t.setAttribute("aria-selected", String(i === j)));
+    const f = FIGS[i]; img.src = f.src; img.alt = f.alt; img.width = f.w; img.height = f.h; cap.innerHTML = f.cap;
+  }
+  tabs.forEach((t, i) => {
+    t.addEventListener("click", () => select(i));
+    t.addEventListener("keydown", ev => { if (ev.key === "ArrowRight" || ev.key === "ArrowLeft"){ const j = (i + (ev.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length; tabs[j].focus(); select(j); } });
+  });
+  FIGS.slice(1).forEach(f => { const im = new Image(); im.src = f.src; });
+})();
+
+/* ------------------------------------------------------------------ BibTeX copy */
+(function(){
+  const btn = document.getElementById("copy-bib"), pre = document.getElementById("bibtex");
+  btn.addEventListener("click", () => {
+    const done = ok => { btn.textContent = ok ? "Copied" : "Select and copy"; setTimeout(() => { btn.textContent = "Copy"; }, 1800); };
+    const selectText = () => { const r = document.createRange(); r.selectNodeContents(pre); const s = window.getSelection(); s.removeAllRanges(); s.addRange(r); };
+    try {
+      navigator.clipboard.writeText(pre.textContent).then(() => done(true), () => { selectText(); done(false); });
+    } catch (e) { selectText(); done(false); }
+  });
+})();
+})();
+</script>
+</body>
+</html>
