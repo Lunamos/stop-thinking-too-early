@@ -2,7 +2,7 @@
 
 **Zehao Jin, Ruixuan Deng, Junran Wang** · Georgia Institute of Technology
 
-[Project page and interactive demo](https://lunamos.github.io/stop-thinking-too-early/) · [arXiv:2609.36585](https://arxiv.org/abs/2609.36585) · [Paper (PDF)](docs/assets/paper.pdf) · Video: [YouTube](https://youtu.be/zauTNrrZQW8), [Bilibili](https://www.bilibili.com/video/BV1Ymad68Eof)
+[Project page and interactive demo](https://lunamos.github.io/stop-thinking-too-early/) · [arXiv:2609.36585](https://arxiv.org/abs/2609.36585) · Video: [YouTube](https://youtu.be/zauTNrrZQW8), [Bilibili (CN)](https://www.bilibili.com/video/BV1Ymad68Eof)
 
 ![The failure, the fix and the gains](docs/assets/fig-teaser.png)
 
